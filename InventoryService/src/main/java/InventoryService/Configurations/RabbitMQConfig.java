@@ -9,6 +9,7 @@ import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
@@ -26,17 +27,36 @@ public class RabbitMQConfig {
 	public static final String INVENTORY_EXCHANGE="inventory.exchange";
 	public static final String INVENTORY_ROUTING_KEY="inventory.check";
 	
+	public static final String ROLLBACK_QUEUE="rollback.queue";
+	public static final String ROLLBACK_EXCHANGE="rollback.exchange";
+	public static final String ROLLBACK_ROUTING_KEY="rollback";
+	
+	@Bean
+	public Queue rollbackQueue() {
+		return new Queue(ROLLBACK_QUEUE,true);
+	}
+	
+	@Bean
+	public TopicExchange rollbackExchange() {
+		return new TopicExchange(ROLLBACK_EXCHANGE);
+	}
+	
+	@Bean
+	public Binding bindingRollback(@Qualifier("rollbackQueue") Queue rollbackQueue,@Qualifier("rollbackExchange") TopicExchange rollbackExchange) {
+		return BindingBuilder.bind(rollbackQueue).to(rollbackExchange).with(ROLLBACK_ROUTING_KEY);
+	}
+	
 	@Bean
 	public Queue inventoryQueue() {
-		return new Queue(INVENTORY_QUEUE);
+		return new Queue(INVENTORY_QUEUE,true);
 	}
 	@Bean
-	public TopicExchange exchange() {
+	public TopicExchange inventoryExchange() {
 		return new TopicExchange(INVENTORY_EXCHANGE);
 	}
 	@Bean
-	public Binding binding(Queue inventoryQueue,TopicExchange exchange) {
-		return BindingBuilder.bind(inventoryQueue).to(exchange).with(INVENTORY_ROUTING_KEY);
+	public Binding binding(@Qualifier("inventoryQueue") Queue inventoryQueue,@Qualifier("inventoryExchange") TopicExchange inventoryExchange) {
+		return BindingBuilder.bind(inventoryQueue).to(inventoryExchange).with(INVENTORY_ROUTING_KEY);
 	}
 	
 	@Bean

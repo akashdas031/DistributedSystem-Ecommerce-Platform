@@ -6,11 +6,13 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 
 import OrderService.Configurations.RabbitMQConfig;
 import OrderService.Entitirs.Order;
+import OrderService.Entitirs.RollBackEvent;
 import OrderService.Enums.OrderStatus;
 import OrderService.Enums.PaymentStatus;
 import OrderService.Repositories.OrderRepository;
@@ -30,16 +32,31 @@ public class OrderServiceImpl implements OrderService{
 	
 	@Override
 	public Order createOrder(Order order) {
-		String orderId = UUID.randomUUID().toString().substring(10).replaceAll("-", "").trim();
-		order.setOrderId(orderId);
-		order.setOrderStatus(OrderStatus.CREATED);
-		order.setPaymentStatus(PaymentStatus.PENDING);
-		order.setOrderPlacedTime(LocalDateTime.now());
-		order.setOrderUpdatedTime(LocalDateTime.now());
-		this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_EXCHANGE,RabbitMQConfig.INVENTORY_ROUTING_KEY,order);
-		return this.orderRepo.save(order);
+		try {
+			String orderId = UUID.randomUUID().toString().substring(10).replaceAll("-", "").trim();
+			order.setOrderId(orderId);
+			order.setOrderStatus(OrderStatus.CREATED);
+			order.setPaymentStatus(PaymentStatus.PENDING);
+			order.setOrderPlacedTime(LocalDateTime.now());
+			order.setOrderUpdatedTime(LocalDateTime.now());
+			this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_EXCHANGE,RabbitMQConfig.INVENTORY_ROUTING_KEY,order);
+			logger.info("Order : "+order);
+			this.rabbitTemplate.convertAndSend(RabbitMQConfig.PAYMENT_EXCHANGE,RabbitMQConfig.PAYMENT_ROUTING_KEY,order);
+//			if(true) {
+//				throw new RuntimeException("Some Error Occured Here...");
+//			}
+			return this.orderRepo.save(order);
+		}catch(Exception e) {
+			order.setOrderStatus(OrderStatus.INTERRUPTED);
+			RollBackEvent ord = RollBackEvent.builder().order(order).serviceName("ORDER_SERVICE").reason(e.getMessage()).time(LocalDateTime.now()).build();
+			this.rabbitTemplate.convertAndSend(RabbitMQConfig.ROLLBACK_EXCHANGE,RabbitMQConfig.ROLLBACK_ROUTING_KEY,ord);
+			logger.info("Error occured in the Order Service : "+e.getMessage());
+		}
+		return null; 
 	}
-
+	
+	
+	
 	@Override
 	public List<Order> getAllOrderList() {
 		
@@ -71,5 +88,10 @@ public class OrderServiceImpl implements OrderService{
 		Order updatedOrder = this.orderRepo.save(stock);
 		return updatedOrder;
 	}
-
+	@RabbitListener(queues=RabbitMQConfig.ROLLBACK_QUEUE)
+	public void rollbackForOrderService(RollBackEvent event) {
+		Order order = event.getOrder();
+		Order updatedOrder = this.updateOrder(order, order.getProductId(), order.getOrderId());
+		logger.info("Order has been rolled back...:"+updatedOrder);
+	}
 }

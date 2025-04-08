@@ -15,6 +15,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.ToString;
 
 @Entity
 @Getter
@@ -23,6 +24,7 @@ import lombok.Setter;
 @NoArgsConstructor
 @Builder
 @Table(name="Order_Table")
+@ToString
 public class Order implements Serializable{
 	
 	@Id

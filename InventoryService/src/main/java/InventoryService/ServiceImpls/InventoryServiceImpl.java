@@ -1,5 +1,6 @@
 package InventoryService.ServiceImpls;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -7,6 +8,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +16,7 @@ import InventoryService.Configurations.RabbitMQConfig;
 import InventoryService.Entities.Inventory;
 import InventoryService.Entities.Order;
 import InventoryService.Entities.Product;
+import InventoryService.Entities.RollBackEvent;
 import InventoryService.Repositories.InventoryRepository;
 import InventoryService.Services.InventoryService;
 import InventoryService.Services.ProductClient;
@@ -26,10 +29,12 @@ public class InventoryServiceImpl implements InventoryService{
 	private InventoryRepository inventoryRepo;
 	private ProductClient productClient;
 	private RedisTemplate<String,Object> redisTemplate;
-	public InventoryServiceImpl(InventoryRepository inventoryRepo,ProductClient productClient,RedisTemplate<String,Object> redisTemplate) {
+	private RabbitTemplate rabbitTemplate;
+	public InventoryServiceImpl(InventoryRepository inventoryRepo,ProductClient productClient,RedisTemplate<String,Object> redisTemplate,RabbitTemplate rabbitTemplate) {
 		this.inventoryRepo=inventoryRepo;
 		this.productClient=productClient;
 		this.redisTemplate=redisTemplate;
+		this.rabbitTemplate=rabbitTemplate;
 	}
 	
 	@Override
@@ -68,28 +73,34 @@ public class InventoryServiceImpl implements InventoryService{
 	
 	@RabbitListener(queues=RabbitMQConfig.INVENTORY_QUEUE)
 	public void handleInventoryCheck(Order order) {
-		String productId=order.getProductId();
-		int requestedQuantity=Integer.valueOf(order.getQuantity());
-		//get from the product client that the product is available or not ..it's optional but i generate a synchronous communication here
-		Product product = this.productClient.getProduct(productId);
-		if(product==null) {
-			throw new RuntimeException("Product Details Not available in the server...");
+		try {
+			String productId=order.getProductId();
+			int requestedQuantity=Integer.valueOf(order.getQuantity());
+			//get from the product client that the product is available or not ..it's optional but i generate a synchronous communication here
+			Product product = this.productClient.getProduct(productId);
+			if(product==null) {
+				throw new RuntimeException("Product Details Not available in the server...");
+			}
+			//check whether the product is available in the inventory or not if available then check for quantity is sufficient for the requested quantity or not 
+			//if not sufficient throw exception
+			//else store the current inventory in the cache
+			// and update the inventory by subtracting the requested quantity 
+			Inventory inventoryProduct = this.inventoryRepo.findByProductId(productId);
+			int available=Integer.valueOf(inventoryProduct.getQuantityAvailable());
+			if(available<requestedQuantity) {
+				throw new RuntimeException("Insufficient Stock Quantity...");
+			}
+			this.redisTemplate.opsForValue().set("inventory :"+order.getProductId(), inventoryProduct.getQuantityAvailable());
+			inventoryProduct.setQuantityAvailable(String.valueOf(available-requestedQuantity));
+			this.inventoryRepo.save(inventoryProduct);
+		}catch(Exception e) {
+			RollBackEvent rollback = RollBackEvent.builder().order(order).serviceName("INVENTORY_SERVICE").reason(e.getMessage()).time(LocalDateTime.now()).build();
+		    
 		}
-		//check whether the product is available in the inventory or not if available then check for quantity is sufficient for the requested quantity or not 
-		//if not sufficient throw exception
-		//else store the current inventory in the cache
-		// and update the inventory by subtracting the requested quantity 
-		Inventory inventoryProduct = this.inventoryRepo.findByProductId(productId);
-		int available=Integer.valueOf(inventoryProduct.getQuantityAvailable());
-		if(available<requestedQuantity) {
-			throw new RuntimeException("Insufficient Stock Quantity...");
-		}
-		this.redisTemplate.opsForValue().set("inventory :"+order.getProductId(), inventoryProduct.getQuantityAvailable());
-		inventoryProduct.setQuantityAvailable(String.valueOf(available-requestedQuantity));
-		this.inventoryRepo.save(inventoryProduct);
 	}
-	
-	public void RollBackForInventory(String productId) {
+	@RabbitListener(queues=RabbitMQConfig.ROLLBACK_QUEUE)
+	public void RollBackForInventory(RollBackEvent rollback) {
+		String productId=rollback.getOrder().getProductId();
 		Object cacheQty=redisTemplate.opsForValue().get("inventory :"+productId);
 		if(cacheQty != null) {
 			Inventory inventoryProduct = this.inventoryRepo.findByProductId(productId);
