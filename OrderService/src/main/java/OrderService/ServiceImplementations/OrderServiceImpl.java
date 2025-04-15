@@ -59,6 +59,7 @@ public class OrderServiceImpl implements OrderService{
 	public void validatePaymentStatus(String status) throws InterruptedException {
 		//Thread.currentThread().sleep(10000);
 		logger.info("Status Recieved from the PaymentService : "+status);
+		
 	}
 	
 	@Override
@@ -94,7 +95,7 @@ public class OrderServiceImpl implements OrderService{
 	}
 	@RabbitListener(queues=RabbitMQConfig.ROLLBACK_QUEUE)
 	public void rollbackForOrderService(RollBackEvent event) throws InterruptedException {
-		Thread.currentThread().sleep(1000);
+		Thread.currentThread().sleep(10000);
 		Order order = event.getOrder();
 		logger.info("Reason for Rollback : "+event.getOrder().getOrderStatus());
 		
