@@ -1,5 +1,6 @@
 package InventoryService.ServiceImpls;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -7,17 +8,22 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
+import com.rabbitmq.client.Channel;
+
 import InventoryService.Configurations.RabbitMQConfig;
 import InventoryService.Entities.Inventory;
 import InventoryService.Entities.Order;
+import InventoryService.Entities.PaymentRequestDTO;
 import InventoryService.Entities.Product;
 import InventoryService.Entities.RollBackEvent;
 import InventoryService.Enums.OrderStatus;
+import InventoryService.Enums.PaymentStatus;
 import InventoryService.Repositories.InventoryRepository;
 import InventoryService.Services.InventoryService;
 import InventoryService.Services.ProductClient;
@@ -72,8 +78,8 @@ public class InventoryServiceImpl implements InventoryService{
 		return updatedProduct;
 	}
 	
-	@RabbitListener(queues=RabbitMQConfig.INVENTORY_QUEUE)
-	public void handleInventoryCheck(Order order) throws InterruptedException {
+	@RabbitListener(queues=RabbitMQConfig.ORDER_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
+	public void handleInventoryCheck(Order order,Channel channel,Message message) throws InterruptedException, IOException {
 		try {
 			String productId=order.getProductId();
 			int requestedQuantity=Integer.valueOf(order.getQuantity());
@@ -98,34 +104,73 @@ public class InventoryServiceImpl implements InventoryService{
 				logger.info("Price not Equal ...something wrong in the throwing exception");
 				throw new RuntimeException("Invalid Amount...Pay valid Amount...");
 			}
+			this.redisTemplate.opsForValue().set("Order : "+productId, order.getOrderId());
 			this.redisTemplate.opsForValue().set("inventory :"+order.getProductId(), inventoryProduct.getQuantityAvailable());
 			inventoryProduct.setQuantityAvailable(String.valueOf(available-requestedQuantity));
+			PaymentRequestDTO paymentDetails = PaymentRequestDTO.builder().productId(productId).amount(pricePaidByUser).build();
+			this.rabbitTemplate.convertAndSend(RabbitMQConfig.PAYMENT_EXCHANGE,RabbitMQConfig.PAYMENT_ROUTING_KEY,paymentDetails);
+
 			this.inventoryRepo.save(inventoryProduct);
+			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
 		}catch(RuntimeException ex) {
 			logger.info(ex.getMessage());
 			order.setOrderStatus(OrderStatus.INTERRUPTED);
 			RollBackEvent rollback = RollBackEvent.builder().order(order).serviceName("INVENTORY_SERVICE").reason(ex.getMessage()).time(LocalDateTime.now()).build();
-			Thread.currentThread().sleep(10000);
-			this.rabbitTemplate.convertAndSend(RabbitMQConfig.ROLLBACK_EXCHANGE,RabbitMQConfig.ROLLBACK_ROUTING_KEY,rollback);
+			//Thread.currentThread().sleep(10000);
+			this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_FAILURE_EXCHANGE,RabbitMQConfig.INVENTORY_FAILURE_ROUTING_KEY,rollback);
+		    channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, false);
 		}
 		catch(Exception e) {
 			logger.info(e.getMessage());
 			order.setOrderStatus(OrderStatus.INTERRUPTED);
 			RollBackEvent rollback = RollBackEvent.builder().order(order).serviceName("INVENTORY_SERVICE").reason(e.getMessage()).time(LocalDateTime.now()).build();
-			Thread.currentThread().sleep(10000);
-			this.rabbitTemplate.convertAndSend(RabbitMQConfig.ROLLBACK_EXCHANGE,RabbitMQConfig.ROLLBACK_ROUTING_KEY,rollback);
+			//Thread.currentThread().sleep(10000);
+			this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_FAILURE_EXCHANGE,RabbitMQConfig.INVENTORY_FAILURE_ROUTING_KEY,rollback);
 		
 		}
 	}
-	@RabbitListener(queues=RabbitMQConfig.ROLLBACK_QUEUE)
-	public void RollBackForInventory(RollBackEvent rollback) {
-		String productId=rollback.getOrder().getProductId();
-		Object cacheQty=redisTemplate.opsForValue().get("inventory :"+productId);
-		if(cacheQty != null) {
-			Inventory inventoryProduct = this.inventoryRepo.findByProductId(productId);
-			inventoryProduct.setQuantityAvailable(cacheQty.toString());
-			this.inventoryRepo.save(inventoryProduct);
-			this.redisTemplate.delete("inventory :"+productId);
+	@RabbitListener(queues=RabbitMQConfig.PAYMENT_FAILURE_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
+	public void RollBackForInventory(RollBackEvent rollback,Message message,Channel channel) throws IOException {
+		try {
+			logger.info("Status From Payment Service : "+rollback.getReason());
+			String productId=rollback.getOrder().getProductId();
+			Object cacheQty=redisTemplate.opsForValue().get("inventory :"+productId);
+			if(cacheQty != null) {
+				Inventory inventoryProduct = this.inventoryRepo.findByProductId(productId);
+				inventoryProduct.setQuantityAvailable(cacheQty.toString());
+				this.inventoryRepo.save(inventoryProduct);
+				this.redisTemplate.delete("inventory :"+productId);
+				this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_FAILURE_EXCHANGE,RabbitMQConfig.INVENTORY_FAILURE_ROUTING_KEY,rollback);
+			}
+			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+		}catch(Exception e) {
+			logger.info(e.getMessage());
+			channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, false);
+		}
+	}
+	@RabbitListener(queues=RabbitMQConfig.PAYMENT_SUCCESS_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
+	public void paymentSuccess(RollBackEvent rollback,Message message,Channel channel) throws IOException {
+		try {
+			Object order = this.redisTemplate.opsForValue().get("Order : "+rollback.getOrder().getProductId());
+			logger.info("Order from Redis : "+order.toString());
+			Order build = Order.builder().orderId(order.toString()).productId(rollback.getOrder().getProductId()).paymentStatus(PaymentStatus.SUCCESSFUL).orderUpdatedTime(LocalDateTime.now()).build();
+			logger.info("Status From Payment Service : "+rollback.getReason());
+			rollback.setOrder(build);
+			rollback.setServiceName("INVENTORY_SERVICE");
+			rollback.setReason("INVENTORY_SUCCESS");
+//			String productId=rollback.getOrder().getProductId();
+//			Object cacheQty=redisTemplate.opsForValue().get("inventory :"+productId);
+//			if(cacheQty != null) {
+//				Inventory inventoryProduct = this.inventoryRepo.findByProductId(productId);
+//				//inventoryProduct.setQuantityAvailable(cacheQty.toString());
+				//this.inventoryRepo.save(inventoryProduct);
+				//this.redisTemplate.delete("inventory :"+productId);
+				this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_SUCCESS_EXCHANGE,RabbitMQConfig.INVENTORY_SUCCESS_ROUTING_KEY,rollback);
+			//}
+			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+		}catch(Exception e) {
+			logger.info(e.getMessage());
+			channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, false);
 		}
 	}
 

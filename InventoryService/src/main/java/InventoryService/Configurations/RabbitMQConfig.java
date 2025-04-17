@@ -2,10 +2,12 @@ package InventoryService.Configurations;
 
 import java.time.Duration;
 
+import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
@@ -23,40 +25,100 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 @Configuration
 public class RabbitMQConfig {
 
-	public static final String INVENTORY_QUEUE="invetory.check.queue";
-	public static final String INVENTORY_EXCHANGE="inventory.exchange";
-	public static final String INVENTORY_ROUTING_KEY="inventory.check";
+	//Order queue consumer
+	public static final String ORDER_QUEUE="order.queue";
+	public static final String ORDER_EXCHANGE="order.exchange";
+	public static final String ORDER_ROUTING_KEY="order";
+	//Payment success Queue Consumer
+	public static final String PAYMENT_SUCCESS_QUEUE="payment.success.queue";
+	public static final String PAYMENT_SUCCESS_EXCHANGE="payment.success.exchange";
+	public static final String PAYMENT_SUCCESS_ROUTING_KEY="payment.success";
 	
-	public static final String ROLLBACK_QUEUE="rollback.queue";
-	public static final String ROLLBACK_EXCHANGE="rollback.exchange";
-	public static final String ROLLBACK_ROUTING_KEY="rollback";
+	//Payment failure Queue Consumer
+    public static final String PAYMENT_FAILURE_QUEUE="payment.failure.queue";
+	public static final String PAYMENT_FAILURE_EXCHANGE="payment.failure.exchange";
+	public static final String PAYMENT_FAILURE_ROUTING_KEY="payment.failure";
+	//Inventory Success producer
+	public static final String INVENTORY_SUCCESS_EXCHANGE="inventory.success.exchange";
+	public static final String INVENTORY_SUCCESS_ROUTING_KEY="inventory.success";
 	
 	@Bean
-	public Queue rollbackQueue() {
-		return new Queue(ROLLBACK_QUEUE,true);
+	public TopicExchange inventorySuccessExchange() {
+		return new TopicExchange(INVENTORY_SUCCESS_EXCHANGE);
+	}
+	
+	//inventory failure producer
+	public static final String INVENTORY_FAILURE_EXCHANGE="inventory.failure.exchange";
+	public static final String INVENTORY_FAILURE_ROUTING_KEY="inventory.failure";
+	
+	@Bean
+	public TopicExchange inventoryFailureExchange() {
+		return new TopicExchange(INVENTORY_SUCCESS_EXCHANGE);
+	}
+	
+	//payment producer
+	public static final String PAYMENT_EXCHANGE="payment.exchange";
+	public static final String PAYMENT_ROUTING_KEY="payment";
+	
+	@Bean
+	public TopicExchange paymentExchange() {
+		return new TopicExchange(PAYMENT_EXCHANGE);
 	}
 	
 	@Bean
-	public TopicExchange rollbackExchange() {
-		return new TopicExchange(ROLLBACK_EXCHANGE);
+	public SimpleRabbitListenerContainerFactory simpleRabbitListenerContainerFactory(ConnectionFactory connectionFactory) {
+		SimpleRabbitListenerContainerFactory factory=new SimpleRabbitListenerContainerFactory();
+		Jackson2JsonMessageConverter convertor=new Jackson2JsonMessageConverter();
+		factory.setConnectionFactory(connectionFactory);
+		factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+		factory.setMessageConverter(convertor);
+		return factory;
+	}
+	
+	//Queue,Exchange and binding for payment failure Queue Consumer
+	@Bean
+	public Queue paymentFailureQueue() {
+		return new Queue(PAYMENT_FAILURE_QUEUE,true);
 	}
 	
 	@Bean
-	public Binding bindingRollback(@Qualifier("rollbackQueue") Queue rollbackQueue,@Qualifier("rollbackExchange") TopicExchange rollbackExchange) {
-		return BindingBuilder.bind(rollbackQueue).to(rollbackExchange).with(ROLLBACK_ROUTING_KEY);
+	public TopicExchange paymentFailureExchange() {
+		return new TopicExchange(PAYMENT_FAILURE_EXCHANGE);
 	}
 	
 	@Bean
-	public Queue inventoryQueue() {
-		return new Queue(INVENTORY_QUEUE,true);
+	public Binding bindingPaymentFailure(@Qualifier("paymentFailureQueue") Queue paymentFailureQueue,@Qualifier("paymentFailureExchange") TopicExchange paymentFailureExchange) {
+		return BindingBuilder.bind(paymentFailureQueue).to(paymentFailureExchange).with(PAYMENT_FAILURE_ROUTING_KEY);
+	}
+	
+	//Queue,Exchange and binding for payment Success Queue Consumer
+		@Bean
+		public Queue paymentSuccessQueue() {
+			return new Queue(PAYMENT_SUCCESS_QUEUE,true);
+		}
+		
+		@Bean
+		public TopicExchange paymentSuccessExchange() {
+			return new TopicExchange(PAYMENT_SUCCESS_EXCHANGE);
+		}
+		
+		@Bean
+		public Binding bindingRollback(@Qualifier("paymentSuccessQueue") Queue paymentSuccessQueue,@Qualifier("paymentSuccessExchange") TopicExchange paymentSuccessExchange) {
+			return BindingBuilder.bind(paymentSuccessQueue).to(paymentSuccessExchange).with(PAYMENT_SUCCESS_ROUTING_KEY);
+		}
+	
+	//Queue,Exchange,and Binding for Order Queue Consumer
+	@Bean
+	public Queue orderQueue() {
+		return new Queue(ORDER_QUEUE,true);
 	}
 	@Bean
-	public TopicExchange inventoryExchange() {
-		return new TopicExchange(INVENTORY_EXCHANGE);
+	public TopicExchange orderExchange() {
+		return new TopicExchange(ORDER_EXCHANGE);
 	}
 	@Bean
-	public Binding binding(@Qualifier("inventoryQueue") Queue inventoryQueue,@Qualifier("inventoryExchange") TopicExchange inventoryExchange) {
-		return BindingBuilder.bind(inventoryQueue).to(inventoryExchange).with(INVENTORY_ROUTING_KEY);
+	public Binding binding(@Qualifier("orderQueue") Queue orderQueue,@Qualifier("orderExchange") TopicExchange orderExchange) {
+		return BindingBuilder.bind(orderQueue).to(orderExchange).with(ORDER_ROUTING_KEY);
 	}
 	
 	@Bean
