@@ -45,16 +45,11 @@ public class OrderServiceImpl implements OrderService{
 			order.setOrderUpdatedTime(LocalDateTime.now());
 			this.rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE,RabbitMQConfig.ORDER_ROUTING_KEY,order);
 			logger.info("Order : "+order);
-			//this.rabbitTemplate.convertAndSend(RabbitMQConfig.PAYMENT_EXCHANGE,RabbitMQConfig.PAYMENT_ROUTING_KEY,order);
-//			if(true) {
-//				throw new RuntimeException("Some Error Occured Here...");
-//			}
 			
 			return this.orderRepo.save(order);
 		}catch(Exception e) {
 			order.setOrderStatus(OrderStatus.INTERRUPTED);
 			RollBackEvent ord = RollBackEvent.builder().order(order).serviceName("ORDER_SERVICE").reason(e.getMessage()).time(LocalDateTime.now()).build();
-			//this.rabbitTemplate.convertAndSend(RabbitMQConfig.ROLLBACK_EXCHANGE,RabbitMQConfig.ROLLBACK_ROUTING_KEY,ord);
 			logger.info("Error occured in the Order Service : "+e.getMessage());
 		}
 		return null; 
@@ -63,7 +58,13 @@ public class OrderServiceImpl implements OrderService{
 	public void validatePaymentStatus(RollBackEvent status,Channel channel,Message message) throws InterruptedException, IOException {
 		//Thread.currentThread().sleep(10000);
 		try {
-			logger.info("Status Recieved from the Inventory : "+status.toString());
+			logger.info("Status Recieved from the Inventory : "+status.getOrder().getPaymentStatus());
+			Order order=status.getOrder();
+			Order existingOrder = this.orderRepo.findByProductIdAndOrderId(order.getProductId(), order.getOrderId());
+			existingOrder.setPaymentStatus(order.getPaymentStatus());
+			existingOrder.setOrderStatus(OrderStatus.PLACED);
+			logger.info("Order After Update : "+existingOrder);
+			this.orderRepo.save(existingOrder);
 			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
 		}
 		catch(Exception e) {
@@ -106,12 +107,14 @@ public class OrderServiceImpl implements OrderService{
 	}
 	@RabbitListener(queues=RabbitMQConfig.INVENTORY_FAILURE_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
 	public void rollbackForOrderService(RollBackEvent event,Channel channel,Message message) throws InterruptedException, IOException {
-		//Thread.currentThread().sleep(10000);
 		try {
 			Order order = event.getOrder();
 			logger.info("Reason for Rollback : "+event.getOrder().getOrderStatus());
 			
 			Order updatedOrder = this.updateOrder(order, order.getProductId(), order.getOrderId());
+			updatedOrder.setOrderStatus(OrderStatus.CANCELLED);
+			updatedOrder.setPaymentStatus(PaymentStatus.CANCELLED);
+			this.orderRepo.save(updatedOrder);
 			logger.info("Order has been rolled back...:"+updatedOrder);
 			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
 		}catch(Exception e) {

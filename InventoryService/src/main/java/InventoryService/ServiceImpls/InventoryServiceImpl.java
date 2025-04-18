@@ -36,12 +36,15 @@ public class InventoryServiceImpl implements InventoryService{
 	private InventoryRepository inventoryRepo;
 	private ProductClient productClient;
 	private RedisTemplate<String,Object> redisTemplate;
+	private RedisTemplate<String,Order> redisTemplateO;
 	private RabbitTemplate rabbitTemplate;
-	public InventoryServiceImpl(InventoryRepository inventoryRepo,ProductClient productClient,RedisTemplate<String,Object> redisTemplate,RabbitTemplate rabbitTemplate) {
+	public InventoryServiceImpl(InventoryRepository inventoryRepo,ProductClient productClient,RedisTemplate<String,Object> redisTemplate,RabbitTemplate rabbitTemplate,
+			                    RedisTemplate<String,Order> redisTemplateO) {
 		this.inventoryRepo=inventoryRepo;
 		this.productClient=productClient;
 		this.redisTemplate=redisTemplate;
 		this.rabbitTemplate=rabbitTemplate;
+		this.redisTemplateO=redisTemplateO;
 	}
 	
 	@Override
@@ -154,6 +157,7 @@ public class InventoryServiceImpl implements InventoryService{
 			Object order = this.redisTemplate.opsForValue().get("Order : "+rollback.getOrder().getProductId());
 			logger.info("Order from Redis : "+order.toString());
 			Order build = Order.builder().orderId(order.toString()).productId(rollback.getOrder().getProductId()).paymentStatus(PaymentStatus.SUCCESSFUL).orderUpdatedTime(LocalDateTime.now()).build();
+			//this.redisTemplateO.opsForValue().set("OrderID : "+order.toString(), build);
 			logger.info("Status From Payment Service : "+rollback.getReason());
 			rollback.setOrder(build);
 			rollback.setServiceName("INVENTORY_SERVICE");

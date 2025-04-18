@@ -14,6 +14,7 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.cache.RedisCacheManager.RedisCacheManagerBuilder;
@@ -21,6 +22,8 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
+
+import InventoryService.Entities.Order;
 
 @Configuration
 public class RabbitMQConfig {
@@ -128,8 +131,19 @@ public class RabbitMQConfig {
 	}
 	
 	@Bean
+	@Primary
 	public RedisTemplate<String,Object> redisTemplate(RedisConnectionFactory connection){
 		RedisTemplate<String,Object> redisTemplate=new RedisTemplate();
+		redisTemplate.setConnectionFactory(connection);
+		redisTemplate.setKeySerializer(new StringRedisSerializer());
+		redisTemplate.setValueSerializer(new GenericJackson2JsonRedisSerializer());
+		redisTemplate.setHashKeySerializer(new StringRedisSerializer());
+		redisTemplate.setHashValueSerializer(new GenericJackson2JsonRedisSerializer());
+		return redisTemplate;
+	}
+	@Bean
+	public RedisTemplate<String,Order> redisTemplateO(RedisConnectionFactory connection){
+		RedisTemplate<String,Order> redisTemplate=new RedisTemplate();
 		redisTemplate.setConnectionFactory(connection);
 		redisTemplate.setKeySerializer(new StringRedisSerializer());
 		redisTemplate.setValueSerializer(new GenericJackson2JsonRedisSerializer());
