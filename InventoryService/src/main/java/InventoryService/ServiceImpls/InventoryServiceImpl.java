@@ -27,6 +27,8 @@ import InventoryService.Enums.PaymentStatus;
 import InventoryService.Repositories.InventoryRepository;
 import InventoryService.Services.InventoryService;
 import InventoryService.Services.ProductClient;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 
 @Service
 public class InventoryServiceImpl implements InventoryService{
@@ -38,13 +40,15 @@ public class InventoryServiceImpl implements InventoryService{
 	private RedisTemplate<String,Object> redisTemplate;
 	private RedisTemplate<String,Order> redisTemplateO;
 	private RabbitTemplate rabbitTemplate;
+	private Tracer tracer;
 	public InventoryServiceImpl(InventoryRepository inventoryRepo,ProductClient productClient,RedisTemplate<String,Object> redisTemplate,RabbitTemplate rabbitTemplate,
-			                    RedisTemplate<String,Order> redisTemplateO) {
+			                    RedisTemplate<String,Order> redisTemplateO,Tracer tracer) {
 		this.inventoryRepo=inventoryRepo;
 		this.productClient=productClient;
 		this.redisTemplate=redisTemplate;
 		this.rabbitTemplate=rabbitTemplate;
 		this.redisTemplateO=redisTemplateO;
+		this.tracer=tracer;
 	}
 	
 	@Override
@@ -83,7 +87,9 @@ public class InventoryServiceImpl implements InventoryService{
 	
 	@RabbitListener(queues=RabbitMQConfig.ORDER_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
 	public void handleInventoryCheck(Order order,Channel channel,Message message) throws InterruptedException, IOException {
-		try {
+		Span span = tracer.nextSpan().name("order.queue").start();
+		try(var ignored=tracer.withSpan(span)) {
+			span.tag("order.id", order.getOrderId());
 			String productId=order.getProductId();
 			int requestedQuantity=Integer.valueOf(order.getQuantity());
 			//get from the product client that the product is available or not ..it's optional but i generate a synchronous communication here
@@ -112,7 +118,7 @@ public class InventoryServiceImpl implements InventoryService{
 			inventoryProduct.setQuantityAvailable(String.valueOf(available-requestedQuantity));
 			PaymentRequestDTO paymentDetails = PaymentRequestDTO.builder().productId(productId).amount(pricePaidByUser).build();
 			this.rabbitTemplate.convertAndSend(RabbitMQConfig.PAYMENT_EXCHANGE,RabbitMQConfig.PAYMENT_ROUTING_KEY,paymentDetails);
-
+            
 			this.inventoryRepo.save(inventoryProduct);
 			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
 		}catch(RuntimeException ex) {
@@ -130,6 +136,8 @@ public class InventoryServiceImpl implements InventoryService{
 			//Thread.currentThread().sleep(10000);
 			this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_FAILURE_EXCHANGE,RabbitMQConfig.INVENTORY_FAILURE_ROUTING_KEY,rollback);
 		
+		}finally {
+			span.end();
 		}
 	}
 	@RabbitListener(queues=RabbitMQConfig.PAYMENT_FAILURE_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")

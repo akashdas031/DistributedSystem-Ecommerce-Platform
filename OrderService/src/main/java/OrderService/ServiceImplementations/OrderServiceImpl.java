@@ -21,6 +21,8 @@ import OrderService.Enums.OrderStatus;
 import OrderService.Enums.PaymentStatus;
 import OrderService.Repositories.OrderRepository;
 import OrderService.Services.OrderService;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 
 @Service
 public class OrderServiceImpl implements OrderService{
@@ -28,14 +30,17 @@ public class OrderServiceImpl implements OrderService{
 	private Logger logger=LoggerFactory.getLogger(OrderServiceImpl.class);
 	private OrderRepository orderRepo;
 	private RabbitTemplate rabbitTemplate;
+	private Tracer tracer;
 	
-	public OrderServiceImpl(OrderRepository orderRepo,RabbitTemplate rabbitTemplate) {
+	public OrderServiceImpl(OrderRepository orderRepo,RabbitTemplate rabbitTemplate,Tracer tracer) {
 		this.orderRepo=orderRepo;
 		this.rabbitTemplate=rabbitTemplate;
+		this.tracer=tracer;
 	}
 	
 	@Override
 	public Order createOrder(Order order) {
+		Span span = tracer.nextSpan().name("order.queue").start();
 		try {
 			String orderId = UUID.randomUUID().toString().substring(10).replaceAll("-", "").trim();
 			order.setOrderId(orderId);
@@ -51,6 +56,8 @@ public class OrderServiceImpl implements OrderService{
 			order.setOrderStatus(OrderStatus.INTERRUPTED);
 			RollBackEvent ord = RollBackEvent.builder().order(order).serviceName("ORDER_SERVICE").reason(e.getMessage()).time(LocalDateTime.now()).build();
 			logger.info("Error occured in the Order Service : "+e.getMessage());
+		}finally {
+			span.end();
 		}
 		return null; 
 	}
