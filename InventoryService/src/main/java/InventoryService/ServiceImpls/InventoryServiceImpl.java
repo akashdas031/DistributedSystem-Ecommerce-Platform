@@ -87,9 +87,9 @@ public class InventoryServiceImpl implements InventoryService{
 	
 	@RabbitListener(queues=RabbitMQConfig.ORDER_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
 	public void handleInventoryCheck(Order order,Channel channel,Message message) throws InterruptedException, IOException {
-		Span span = tracer.nextSpan().name("order.queue").start();
+		Span span = tracer.nextSpan().name("order.queue.consumer").start();
 		try(var ignored=tracer.withSpan(span)) {
-			span.tag("order.id", order.getOrderId());
+			span.tag("message","Order with id : "+ order.getOrderId()+" recieved from Order Service . Order Details : "+order);
 			String productId=order.getProductId();
 			int requestedQuantity=Integer.valueOf(order.getQuantity());
 			//get from the product client that the product is available or not ..it's optional but i generate a synchronous communication here
@@ -126,6 +126,7 @@ public class InventoryServiceImpl implements InventoryService{
 			order.setOrderStatus(OrderStatus.INTERRUPTED);
 			RollBackEvent rollback = RollBackEvent.builder().order(order).serviceName("INVENTORY_SERVICE").reason(ex.getMessage()).time(LocalDateTime.now()).build();
 			//Thread.currentThread().sleep(10000);
+			span.tag("error_message", "Something went wrong , Error Message : "+ex.getMessage());
 			this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_FAILURE_EXCHANGE,RabbitMQConfig.INVENTORY_FAILURE_ROUTING_KEY,rollback);
 		    channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, false);
 		}
@@ -134,6 +135,7 @@ public class InventoryServiceImpl implements InventoryService{
 			order.setOrderStatus(OrderStatus.INTERRUPTED);
 			RollBackEvent rollback = RollBackEvent.builder().order(order).serviceName("INVENTORY_SERVICE").reason(e.getMessage()).time(LocalDateTime.now()).build();
 			//Thread.currentThread().sleep(10000);
+			span.tag("error_message", "Something went wrong , Error Message : "+e.getMessage());
 			this.rabbitTemplate.convertAndSend(RabbitMQConfig.INVENTORY_FAILURE_EXCHANGE,RabbitMQConfig.INVENTORY_FAILURE_ROUTING_KEY,rollback);
 		
 		}finally {
@@ -142,7 +144,9 @@ public class InventoryServiceImpl implements InventoryService{
 	}
 	@RabbitListener(queues=RabbitMQConfig.PAYMENT_FAILURE_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
 	public void RollBackForInventory(RollBackEvent rollback,Message message,Channel channel) throws IOException {
+		Span span=tracer.nextSpan().name("payment.queue.failure.cunsumer").start();
 		try {
+			span.tag("message", "Status Recieved from Payment Queue after Payment :"+rollback.getReason());
 			logger.info("Status From Payment Service : "+rollback.getReason());
 			String productId=rollback.getOrder().getProductId();
 			Object cacheQty=redisTemplate.opsForValue().get("inventory :"+productId);
@@ -155,13 +159,18 @@ public class InventoryServiceImpl implements InventoryService{
 			}
 			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
 		}catch(Exception e) {
+			span.tag("error_message", "Something went wrong with payment ,Error Message : "+e.getMessage());
 			logger.info(e.getMessage());
 			channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, false);
+		}finally {
+			span.end();
 		}
 	}
 	@RabbitListener(queues=RabbitMQConfig.PAYMENT_SUCCESS_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
 	public void paymentSuccess(RollBackEvent rollback,Message message,Channel channel) throws IOException {
+		Span span=tracer.nextSpan().name("payment.queue.success.consumer").start();
 		try {
+			span.tag("message", "Status Recieved from Payment Service : "+rollback.getReason());
 			Object order = this.redisTemplate.opsForValue().get("Order : "+rollback.getOrder().getProductId());
 			logger.info("Order from Redis : "+order.toString());
 			Order build = Order.builder().orderId(order.toString()).productId(rollback.getOrder().getProductId()).paymentStatus(PaymentStatus.SUCCESSFUL).orderUpdatedTime(LocalDateTime.now()).build();
@@ -181,8 +190,11 @@ public class InventoryServiceImpl implements InventoryService{
 			//}
 			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
 		}catch(Exception e) {
+			span.tag("error_message", "Status From Payment Service : "+e.getMessage());
 			logger.info(e.getMessage());
 			channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, false);
+		}finally {
+			span.end();
 		}
 	}
 

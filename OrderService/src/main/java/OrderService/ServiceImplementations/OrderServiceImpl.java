@@ -64,7 +64,9 @@ public class OrderServiceImpl implements OrderService{
 	@RabbitListener(queues=RabbitMQConfig.INVENTORY_SUCCESS_QUEUE,containerFactory = "simpleRabbitListenerContainerFactory")
 	public void validatePaymentStatus(RollBackEvent status,Channel channel,Message message) throws InterruptedException, IOException {
 		//Thread.currentThread().sleep(10000);
+		Span span=tracer.nextSpan().name("inventory.succes.queue").start();
 		try {
+			span.tag("message", "Status from the inventory Service : "+status.getOrder().getPaymentStatus());
 			logger.info("Status Recieved from the Inventory : "+status.getOrder().getPaymentStatus());
 			Order order=status.getOrder();
 			Order existingOrder = this.orderRepo.findByProductIdAndOrderId(order.getProductId(), order.getOrderId());
@@ -75,8 +77,11 @@ public class OrderServiceImpl implements OrderService{
 			channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
 		}
 		catch(Exception e) {
+			span.tag("error_message", "Something went wrong in the Order service : "+e.getMessage());
 			logger.info(e.getMessage());
 			channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, false);
+		}finally {
+			span.end();
 		}
 		
 	}
