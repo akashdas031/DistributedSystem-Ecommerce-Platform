@@ -13,7 +13,7 @@ This project follows the **Saga Choreography Pattern** for asynchronous communic
 
 Each service communicates using dedicated RabbitMQ queues and exchanges.
 
-![Architecture Diagram](Untitled-2025-04-07-2015.png) <!-- Replace `architecture.png` with your image file name -->
+![Architecture Diagram](Untitled-2025-04-15-1840.png) <!-- Replace `architecture.png` with your image file name -->
 
 ---
 
